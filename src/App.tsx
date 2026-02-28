@@ -41,6 +41,13 @@ function cn(...inputs: ClassValue[]) {
 type GameState = 'LOBBY' | 'INVESTIGATING' | 'INTERROGATING' | 'DEDUCTION' | 'RESULT';
 type Language = 'en' | 'ar';
 
+interface CaseSession {
+  caseDetails: CaseDetails;
+  discoveredClues: string[];
+  interrogations: { [suspectId: string]: { role: 'user' | 'model'; text: string }[] };
+  lastPlayed: number;
+}
+
 const translations = {
   en: {
     title: "Detective Conan",
@@ -145,9 +152,10 @@ export default function App() {
 
   const [gameState, setGameState] = useState<GameState>('LOBBY');
   const [currentCase, setCurrentCase] = useState<CaseDetails | null>(null);
-  const [pastCases, setPastCases] = useState<CaseDetails[]>([]);
+  const [pastCases, setPastCases] = useState<CaseSession[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedSuspect, setSelectedSuspect] = useState<Suspect | null>(null);
+  const [interrogations, setInterrogations] = useState<{ [suspectId: string]: { role: 'user' | 'model'; text: string }[] }>({});
   const [messages, setMessages] = useState<{ role: 'user' | 'model'; text: string }[]>([]);
   const [inputText, setInputText] = useState('');
   const [discoveredClues, setDiscoveredClues] = useState<string[]>([]);
@@ -173,18 +181,40 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
+  // Auto-save current session
+  useEffect(() => {
+    if (currentCase && gameState !== 'LOBBY') {
+      const session: CaseSession = {
+        caseDetails: currentCase,
+        discoveredClues,
+        interrogations,
+        lastPlayed: Date.now()
+      };
+      
+      const updated = [...pastCases];
+      const existingIdx = updated.findIndex(c => c.caseDetails.case.title === currentCase.case.title);
+      
+      if (existingIdx >= 0) {
+        updated[existingIdx] = session;
+      } else {
+        updated.unshift(session);
+      }
+      
+      const limited = updated.slice(0, 10);
+      setPastCases(limited);
+      localStorage.setItem('conan_cases', JSON.stringify(limited));
+    }
+  }, [discoveredClues, interrogations, currentCase, gameState]);
+
   const startNewCase = async (difficulty: string = 'Medium') => {
     setLoading(true);
     try {
       const newCase = await generateNewCase(difficulty, language);
       setCurrentCase(newCase);
       setDiscoveredClues([]);
+      setInterrogations({});
+      setMessages([]);
       setGameState('INVESTIGATING');
-      
-      // Save to history
-      const updated = [newCase, ...pastCases].slice(0, 10); // Keep last 10
-      setPastCases(updated);
-      localStorage.setItem('conan_cases', JSON.stringify(updated));
     } catch (error) {
       console.error("Failed to start case:", error);
     } finally {
@@ -192,17 +222,22 @@ export default function App() {
     }
   };
 
-  const loadPastCase = (caseData: CaseDetails) => {
-    setCurrentCase(caseData);
-    setDiscoveredClues([]);
+  const loadPastCase = (session: CaseSession) => {
+    setCurrentCase(session.caseDetails);
+    setDiscoveredClues(session.discoveredClues || []);
+    setInterrogations(session.interrogations || {});
     setGameState('INVESTIGATING');
   };
 
-  const deletePastCase = (e: React.MouseEvent, id: string) => {
+  const deletePastCase = (e: React.MouseEvent, title: string) => {
     e.stopPropagation();
-    const updated = pastCases.filter(c => c.case.title !== id); // Using title as pseudo-ID for now
+    const updated = pastCases.filter(c => c.caseDetails.case.title !== title);
     setPastCases(updated);
     localStorage.setItem('conan_cases', JSON.stringify(updated));
+    if (currentCase?.case.title === title) {
+      setGameState('LOBBY');
+      setCurrentCase(null);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -210,7 +245,14 @@ export default function App() {
 
     const userMsg = inputText;
     setInputText('');
-    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    
+    const newMessages: { role: 'user' | 'model'; text: string }[] = [
+      ...(interrogations[selectedSuspect.id] || []),
+      { role: 'user', text: userMsg }
+    ];
+    
+    setInterrogations(prev => ({ ...prev, [selectedSuspect.id]: newMessages }));
+    setMessages(newMessages);
     setIsTyping(true);
 
     try {
@@ -218,10 +260,17 @@ export default function App() {
         currentCase.case.description,
         selectedSuspect,
         userMsg,
-        [], // History could be added here for better context
+        [], 
         language
       );
-      setMessages(prev => [...prev, { role: 'model', text: response || '...' }]);
+      
+      const finalMessages: { role: 'user' | 'model'; text: string }[] = [
+        ...newMessages,
+        { role: 'model', text: response || '...' }
+      ];
+      
+      setInterrogations(prev => ({ ...prev, [selectedSuspect.id]: finalMessages }));
+      setMessages(finalMessages);
     } catch (error) {
       console.error("Chat failed:", error);
     } finally {
@@ -364,14 +413,14 @@ export default function App() {
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-[10px] font-mono text-conan-yellow uppercase tracking-wider">Case #{pastCases.length - idx}</span>
                             <button 
-                              onClick={(e) => deletePastCase(e, pc.case.title)}
+                              onClick={(e) => deletePastCase(e, pc.caseDetails.case.title)}
                               className="p-1 hover:text-conan-red text-slate-600 transition-colors"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
                           </div>
-                          <h4 className="text-sm font-serif text-white mb-1 group-hover:text-conan-yellow transition-colors line-clamp-1">{pc.case.title}</h4>
-                          <p className="text-[10px] text-slate-500 line-clamp-2 italic">{pc.case.location}</p>
+                          <h4 className="text-sm font-serif text-white mb-1 group-hover:text-conan-yellow transition-colors line-clamp-1">{pc.caseDetails.case.title}</h4>
+                          <p className="text-[10px] text-slate-500 line-clamp-2 italic">{pc.caseDetails.case.location}</p>
                         </div>
                         <div className="mt-4 flex items-center justify-between text-[10px] font-mono uppercase tracking-widest text-slate-400">
                           <span>{t.resumeCase}</span>
@@ -463,7 +512,8 @@ export default function App() {
                             key={suspect.id}
                             onClick={() => {
                               setSelectedSuspect(suspect);
-                              setMessages([]);
+                              const existingMessages = interrogations[suspect.id] || [];
+                              setMessages(existingMessages);
                               setGameState('INTERROGATING');
                             }}
                             className="w-full text-left p-4 rounded-xl bg-white/5 border border-white/10 hover:border-conan-yellow/50 hover:bg-white/10 transition-all flex items-center justify-between group"
@@ -488,13 +538,43 @@ export default function App() {
                 {/* Sidebar Actions */}
                 <div className="md:w-72 space-y-6">
                   <div className="glass-panel p-6 space-y-6">
-                    <div className="space-y-2">
-                      <h4 className="text-[10px] font-mono uppercase tracking-widest text-slate-500">{t.progress}</h4>
-                      <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-conan-yellow transition-all duration-500" 
-                          style={{ width: `${(discoveredClues.length / currentCase.clues.length) * 100}%` }}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-[10px] font-mono uppercase tracking-widest text-slate-500">{t.progress}</h4>
+                        <span className="text-xs font-mono text-conan-yellow font-bold">
+                          {Math.round((discoveredClues.length / currentCase.clues.length) * 100)}%
+                        </span>
+                      </div>
+                      
+                      <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/10 p-0.5">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(discoveredClues.length / currentCase.clues.length) * 100}%` }}
+                          className="h-full bg-conan-yellow rounded-full shadow-[0_0_10px_rgba(255,215,0,0.3)]" 
+                          transition={{ type: "spring", stiffness: 50, damping: 20 }}
                         />
+                      </div>
+
+                      {/* Visual Clue Tracker */}
+                      <div className="flex flex-wrap gap-2 pt-2">
+                        {currentCase.clues.map((clue, idx) => (
+                          <div 
+                            key={clue.id}
+                            className={cn(
+                              "w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-500 border",
+                              discoveredClues.includes(clue.id)
+                                ? "bg-conan-yellow text-slate-950 border-conan-yellow shadow-[0_0_8px_rgba(255,215,0,0.4)]"
+                                : "bg-white/5 text-slate-600 border-white/10"
+                            )}
+                            title={clue.name}
+                          >
+                            {discoveredClues.includes(clue.id) ? (
+                              <CheckCircle2 className="w-4 h-4" />
+                            ) : (
+                              <span className="text-[10px] font-mono">{idx + 1}</span>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
                     
@@ -506,12 +586,15 @@ export default function App() {
                       {t.makeDeduction}
                     </button>
 
-                    <div className="p-4 rounded-xl bg-conan-blue/10 border border-conan-blue/20">
+                    <div className="p-4 rounded-xl bg-conan-blue/10 border border-conan-blue/20 relative overflow-hidden group">
+                      <div className="absolute top-0 right-0 p-1 opacity-10 group-hover:opacity-20 transition-opacity">
+                        <Search className="w-12 h-12 -rotate-12" />
+                      </div>
                       <div className="flex items-center gap-2 text-conan-blue mb-2">
                         <Info className="w-4 h-4" />
                         <span className="text-[10px] font-bold uppercase tracking-wider">{t.tipTitle}</span>
                       </div>
-                      <p className="text-xs text-slate-400 italic leading-relaxed">
+                      <p className="text-xs text-slate-400 italic leading-relaxed relative z-10">
                         {t.tipDesc}
                       </p>
                     </div>
