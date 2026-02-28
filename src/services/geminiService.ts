@@ -36,14 +36,17 @@ export interface CaseDetails {
   };
 }
 
-export const generateNewCase = async (difficulty: string = "Medium"): Promise<CaseDetails> => {
+export const generateNewCase = async (difficulty: string = "Medium", language: "en" | "ar" = "en"): Promise<CaseDetails> => {
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: `Generate a new Detective Conan style mystery case. 
+    contents: `Generate a new Detective Conan style mystery case in ${language === 'ar' ? 'Arabic' : 'English'}. 
+    The setting should be in Egypt (Cairo, Alexandria, etc.) with Egyptian characters and names.
+    If the language is Arabic, use Egyptian dialect for suspect dialogue and descriptions where appropriate to give it an authentic Egyptian feel.
     Difficulty: ${difficulty}. 
     The case should involve a locked-room mystery or a complex alibi.
     Include a title, description, location, 4-5 clues, and 3-4 suspects.
-    One suspect is the culprit. Provide the solution.`,
+    One suspect is the culprit. Provide the solution.
+    Ensure all text fields (title, description, location, clue names/descriptions, suspect names/roles/descriptions/motives, solution reasoning) are in ${language === 'ar' ? 'Arabic' : 'English'}.`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -112,7 +115,8 @@ export const chatWithSuspect = async (
   caseContext: string,
   suspect: Suspect,
   message: string,
-  history: { role: "user" | "model"; parts: { text: string }[] }[]
+  history: { role: "user" | "model"; parts: { text: string }[] }[],
+  language: "en" | "ar" = "en"
 ) => {
   const chat = ai.chats.create({
     model: "gemini-3-flash-preview",
@@ -123,7 +127,7 @@ export const chatWithSuspect = async (
       Motive: ${suspect.motive}.
       Case Context: ${caseContext}.
       
-      Respond to the detective's questions in the language they use. If they speak Arabic, respond in Arabic. If they speak English, respond in English. 
+      Respond to the detective's questions in ${language === 'ar' ? 'Arabic' : 'English'}. 
       If you are the culprit, try to be evasive but don't lie about verifiable facts unless you have a solid alibi. If you are innocent, be helpful but maybe a bit annoyed or scared. 
       Keep responses concise and in character.`,
     },
@@ -136,7 +140,8 @@ export const chatWithSuspect = async (
 export const evaluateDeduction = async (
   caseDetails: CaseDetails,
   selectedCulpritId: string,
-  reasoning: string
+  reasoning: string,
+  language: "en" | "ar" = "en"
 ) => {
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -149,6 +154,7 @@ export const evaluateDeduction = async (
     Player's Reasoning: ${reasoning}
     
     Evaluate if the player is correct. If they chose the wrong person, explain why their reasoning fails. If they chose the right person but have weak reasoning, point that out. 
+    Provide the response in ${language === 'ar' ? 'Arabic' : 'English'}.
     Provide a score from 0 to 100 and a narrative response from Conan or Kogoro Mouri.`,
     config: {
       responseMimeType: "application/json",
